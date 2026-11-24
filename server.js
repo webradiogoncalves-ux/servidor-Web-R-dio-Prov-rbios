@@ -7,19 +7,19 @@ const server = http.createServer(app);
 
 app.use(cors());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const SOURCE_USER = process.env.SOURCE_USER || "source";
 const SOURCE_PASSWORD = process.env.SOURCE_PASSWORD;
 
 let sourceConnected = false;
 let totalBytes = 0;
-const listeners = new Set();
+let listeners = new Set();
 
 app.get("/", (req, res) => {
   res.json({
     radio: "Web Rádio Provérbios",
     status: "online",
-    transmission: sourceConnected ? "recebendo áudio" : "aguardando conexão",
+    transmissao: sourceConnected ? "recebendo áudio" : "aguardando áudio",
     stream: "/stream"
   });
 });
@@ -35,104 +35,95 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Entrada de áudio do painel
-server.on("request", (req, res) => {
-  const path = req.url.split("?")[0];
+// Receber transmissão do painel
+app.all(["/source", "/live"], (req, res) => {
+  if (!["POST", "PUT", "SOURCE"].includes(req.method)) {
+    return res.status(405).send("Método não permitido");
+  }
 
-  if (
-    ["/source", "/live"].includes(path) &&
-    ["SOURCE", "PUT", "POST"].includes(req.method)
-  ) {
-    if (!SOURCE_PASSWORD) {
-      res.writeHead(503);
-      return res.end("Configure SOURCE_PASSWORD no Render");
-    }
+  if (!SOURCE_PASSWORD) {
+    return res.status(503).send("Configure SOURCE_PASSWORD no Render");
+  }
 
-    const auth = req.headers.authorization || "";
-    const expected = Buffer.from(
-      SOURCE_USER + ":" + SOURCE_PASSWORD
-    ).toString("base64");
+  const auth = req.headers.authorization || "";
+  const expected = Buffer.from(
+    SOURCE_USER + ":" + SOURCE_PASSWORD
+  ).toString("base64");
 
-    if (auth !== "Basic " + expected) {
-      res.writeHead(401, {
-        "WWW-Authenticate": 'Basic realm="Radio Source"'
-      });
-      return res.end("Unauthorized");
-    }
+  if (auth !== "Basic " + expected) {
+    return res.status(401).send("Acesso não autorizado");
+  }
 
-    if (sourceConnected) {
-      res.writeHead(409);
-      return res.end("Já existe uma transmissão conectada");
-    }
+  if (sourceConnected) {
+    return res.status(409).send("Já existe uma transmissão conectada");
+  }
 
-    sourceConnected = true;
-    console.log("Fonte de áudio conectada!");
+  sourceConnected = true;
 
-    res.writeHead(200, {
-      "Content-Type": "text/plain",
-      "Connection": "keep-alive"
-    });
-    res.flushHeaders();
+  console.log("Fonte de áudio conectada!");
 
-    req.on("data", chunk => {
-      totalBytes += chunk.length;
+  res.status(200);
+  res.setHeader("Content-Type", "text/plain");
+  res.flushHeaders();
 
-      for (const listener of listeners) {
-        if (!listener.destroyed) {
-          listener.write(chunk);
-        }
+  req.on("data", chunk => {
+    totalBytes += chunk.length;
+
+    for (const listener of listeners) {
+      if (!listener.destroyed && listener.writable) {
+        listener.write(chunk);
       }
-    });
+    }
+  });
 
-    req.on("end", () => {
-      sourceConnected = false;
-      for (const listener of listeners) listener.end();
-      listeners.clear();
-      res.end();
-    });
+  req.on("end", () => {
+    sourceConnected = false;
 
-    req.on("close", () => {
-      sourceConnected = false;
-      for (const listener of listeners) listener.end();
-      listeners.clear();
-      res.end();
-    });
+    for (const listener of listeners) {
+      listener.end();
+    }
 
-    return;
-  }
+    listeners.clear();
+    res.end();
+    console.log("Transmissão encerrada");
+  });
 
-  if (req.method === "GET" &&
-      ["/stream", "/radio.mp3"].includes(path)) {
+  req.on("aborted", () => {
+    sourceConnected = false;
 
-    res.writeHead(200, {
-      "Content-Type": "audio/mpeg",
-      "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
-      "Access-Control-Allow-Origin": "*"
-    });
+    for (const listener of listeners) {
+      listener.end();
+    }
 
-    res.flushHeaders();
-    listeners.add(res);
+    listeners.clear();
+  });
+});
 
-    req.on("close", () => {
-      listeners.delete(res);
-    });
+// Link público de áudio
+app.get(["/stream", "/radio.mp3"], (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "audio/mpeg",
+    "Cache-Control": "no-cache, no-store",
+    "Connection": "keep-alive",
+    "Access-Control-Allow-Origin": "*"
+  });
 
-    return;
-  }
+  res.flushHeaders();
 
-  if (req.method === "GET" && path === "/") {
-    return;
-  }
+  listeners.add(res);
 
-  if (req.method === "GET" && path === "/api/health") {
-    return;
-  }
+  req.on("close", () => {
+    listeners.delete(res);
+  });
+});
 
-  res.writeHead(404);
-  res.end("Not found");
+// Página não encontrada
+app.use((req, res) => {
+  res.status(404).send("Página não encontrada");
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log("Web Rádio Provérbios online na porta " + PORT);
+  console.log(
+    "Web Rádio Provérbios online na porta " + PORT
+  );
 });
