@@ -1,0 +1,13 @@
+{
+  "name": "servidor-web-radio-proverbios",
+  "version": "1.0.0",
+  "description": "Servidor independente da Web Rádio Provérbios",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "cors": "^2.8.5"
+  }
+}
